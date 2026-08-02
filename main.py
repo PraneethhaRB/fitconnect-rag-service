@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb import Documents, EmbeddingFunction, Embeddings
 from groq import Groq
 from dotenv import load_dotenv
 import os
+import requests
 
 load_dotenv()
 
@@ -13,9 +14,32 @@ groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
-embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
+# ─── Embeddings via HuggingFace Inference API (no local torch/onnxruntime) ────
+# This avoids the SIGILL crashes caused by torch/onnxruntime assuming CPU
+# instructions (AVX2/AVX-512) that Render's instance doesn't support.
+# Get a free token at https://huggingface.co/settings/tokens and set it as
+# the HF_API_TOKEN environment variable on Render.
+
+HF_API_URL = (
+    "https://router.huggingface.co/hf-inference/models/"
+    "sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 )
+HF_TOKEN = os.environ.get("HF_API_TOKEN")
+
+
+class HFEmbeddingFunction(EmbeddingFunction):
+    def __call__(self, input: Documents) -> Embeddings:
+        response = requests.post(
+            HF_API_URL,
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
+            json={"inputs": input, "options": {"wait_for_model": True}},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+embedding_function = HFEmbeddingFunction()
 
 collection = chroma_client.get_or_create_collection(
     name="fitness_knowledge",
@@ -189,8 +213,7 @@ class AnswerResponse(BaseModel):
 
 @app.post("/ask", response_model=AnswerResponse)
 async def ask_question(request: QuestionRequest):
-    # Step 1: RETRIEVE — pure vector similarity, no filter
-    # (filter removed for reliability across Chroma versions)
+    # Step 1: RETRIEVE — pure vector similarity
     results = collection.query(
         query_texts=[request.question],
         n_results=request.top_k
@@ -233,8 +256,6 @@ User's question: {request.question}
 Answer:"""
 
     # Step 3: GENERATE
-    # Check console.groq.com/docs/models for currently available models
-    # and replace the model name below with one that is active
     chat_completion = groq_client.chat.completions.create(
         messages=[
             {
@@ -247,7 +268,7 @@ Answer:"""
                 "content": prompt
             }
         ],
-        model="llama3-70b-8192",  # verify this is active in your Groq console
+        model="openai/gpt-oss-120b",
         temperature=0.3,
         max_tokens=250
     )
@@ -266,9 +287,9 @@ async def health():
     return {
         "status": "healthy",
         "chunks_indexed": collection.count(),
-        "embedding_model": "all-MiniLM-L6-v2",
+        "embedding_model": "sentence-transformers/all-MiniLM-L6-v2 (via HF Inference API)",
         "vector_db": "Chroma",
-        "llm": "Groq llama-3.3-70b-versatile"
+        "llm": "Groq openai/gpt-oss-120b"
     }
 
 
