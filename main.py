@@ -5,29 +5,54 @@ from chromadb.utils import embedding_functions
 from groq import Groq
 from dotenv import load_dotenv
 import os
+#----Check:
+# load_dotenv()
 
+# app = FastAPI(title="FitConnect RAG Service")
+# groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+
+# # Initialize Chroma with a local persistent store
+# # Data survives restarts — stored in ./chroma_db folder
+# chroma_client = chromadb.PersistentClient(path="./chroma_db")
+
+# # Use sentence-transformers for embeddings — free, runs locally
+# # all-MiniLM-L6-v2 is small (80MB), fast, and good quality
+# embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+#     model_name="all-MiniLM-L6-v2"
+# )
+
+# # Get or create our fitness knowledge collection
+# collection = chroma_client.get_or_create_collection(
+#     name="fitness_knowledge",
+#     embedding_function=embedding_function,
+#     metadata={"hnsw:space": "cosine"}  # cosine similarity for text
+# )
+#----check end:
+print("STEP 1")
 load_dotenv()
 
+print("STEP 2")
 app = FastAPI(title="FitConnect RAG Service")
+
+print("STEP 3")
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-# Initialize Chroma with a local persistent store
-# Data survives restarts — stored in ./chroma_db folder
+print("STEP 4")
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
-# Use sentence-transformers for embeddings — free, runs locally
-# all-MiniLM-L6-v2 is small (80MB), fast, and good quality
+print("STEP 5")
 embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="all-MiniLM-L6-v2"
 )
 
-# Get or create our fitness knowledge collection
-collection = chroma_client.get_or_create_collection(
+print("STEP 6")
+collection = chromadb.PersistentClient(path="./chroma_db").get_or_create_collection(
     name="fitness_knowledge",
     embedding_function=embedding_function,
-    metadata={"hnsw:space": "cosine"}  # cosine similarity for text
+    metadata={"hnsw:space": "cosine"}
 )
 
+print("STEP 7")
 # ─── Knowledge base ───────────────────────────────────────────────────────────
 # These are your knowledge chunks — same content as before,
 # now stored as vectors instead of a dictionary
