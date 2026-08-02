@@ -1,61 +1,27 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 import chromadb
 from chromadb.utils import embedding_functions
 from groq import Groq
 from dotenv import load_dotenv
 import os
-#----Check:
-# load_dotenv()
 
-# app = FastAPI(title="FitConnect RAG Service")
-# groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
-# # Initialize Chroma with a local persistent store
-# # Data survives restarts — stored in ./chroma_db folder
-# chroma_client = chromadb.PersistentClient(path="./chroma_db")
-
-# # Use sentence-transformers for embeddings — free, runs locally
-# # all-MiniLM-L6-v2 is small (80MB), fast, and good quality
-# embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-#     model_name="all-MiniLM-L6-v2"
-# )
-
-# # Get or create our fitness knowledge collection
-# collection = chroma_client.get_or_create_collection(
-#     name="fitness_knowledge",
-#     embedding_function=embedding_function,
-#     metadata={"hnsw:space": "cosine"}  # cosine similarity for text
-# )
-#----check end:
-print("STEP 1")
 load_dotenv()
 
-print("STEP 2")
 app = FastAPI(title="FitConnect RAG Service")
-
-print("STEP 3")
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-print("STEP 4")
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
-print("STEP 5")
 embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="all-MiniLM-L6-v2"
 )
 
-print("STEP 6")
-collection = chromadb.PersistentClient(path="./chroma_db").get_or_create_collection(
+collection = chroma_client.get_or_create_collection(
     name="fitness_knowledge",
     embedding_function=embedding_function,
     metadata={"hnsw:space": "cosine"}
 )
-
-print("STEP 7")
-# ─── Knowledge base ───────────────────────────────────────────────────────────
-# These are your knowledge chunks — same content as before,
-# now stored as vectors instead of a dictionary
 
 FITNESS_KNOWLEDGE = [
     {
@@ -139,7 +105,7 @@ FITNESS_KNOWLEDGE = [
         raises resting metabolic rate. High intensity interval training burns more
         calories in less time than steady state cardio. Aim for 3 to 4 training
         sessions per week combining both modalities. Non exercise activity
-        thermogenesis (NEAT) — steps, walking, standing — accounts for significant
+        thermogenesis NEAT — steps, walking, standing — accounts for significant
         daily calorie burn and should not be neglected.""",
         "category": "training",
         "goal": "LOSE_WEIGHT"
@@ -185,8 +151,8 @@ FITNESS_KNOWLEDGE = [
     }
 ]
 
+
 def seed_knowledge_base():
-    """Add all knowledge chunks to Chroma if not already there."""
     existing = collection.count()
     if existing >= len(FITNESS_KNOWLEDGE):
         print(f"Knowledge base already seeded with {existing} chunks")
@@ -194,26 +160,19 @@ def seed_knowledge_base():
 
     print(f"Seeding knowledge base with {len(FITNESS_KNOWLEDGE)} chunks...")
 
-    ids = [chunk["id"] for chunk in FITNESS_KNOWLEDGE]
-    texts = [chunk["text"] for chunk in FITNESS_KNOWLEDGE]
-    metadatas = [
-        {"category": chunk["category"], "goal": chunk["goal"]}
-        for chunk in FITNESS_KNOWLEDGE
-    ]
-
-    # Chroma automatically generates embeddings using the
-    # SentenceTransformer embedding function we configured above
     collection.add(
-        ids=ids,
-        documents=texts,
-        metadatas=metadatas
+        ids=[chunk["id"] for chunk in FITNESS_KNOWLEDGE],
+        documents=[chunk["text"] for chunk in FITNESS_KNOWLEDGE],
+        metadatas=[
+            {"category": chunk["category"], "goal": chunk["goal"]}
+            for chunk in FITNESS_KNOWLEDGE
+        ]
     )
     print("Knowledge base seeded successfully")
 
-# Seed on startup
+
 seed_knowledge_base()
 
-# ─── Request/Response models ──────────────────────────────────────────────────
 
 class QuestionRequest(BaseModel):
     question: str
@@ -221,43 +180,30 @@ class QuestionRequest(BaseModel):
     goal_category: str = "GENERAL_FITNESS"
     top_k: int = 3
 
+
 class AnswerResponse(BaseModel):
     answer: str
     retrieved_chunks: list[str]
     retrieval_method: str = "vector_similarity"
 
-# ─── Core RAG endpoint ────────────────────────────────────────────────────────
 
 @app.post("/ask", response_model=AnswerResponse)
 async def ask_question(request: QuestionRequest):
-    """
-    RAG endpoint: retrieve relevant chunks by vector similarity,
-    then generate a grounded answer using Groq.
-    """
-
-    # ── Step 1: RETRIEVE ──────────────────────────────────────────────────────
-    # Chroma converts the question to a vector using our embedding function
-    # then finds the most similar vectors using cosine similarity
+    # Step 1: RETRIEVE — pure vector similarity, no filter
+    # (filter removed for reliability across Chroma versions)
     results = collection.query(
         query_texts=[request.question],
-        n_results=request.top_k,
-        # optionally filter by goal category to improve relevance
-        where={"goal": {"$in": [request.goal_category, "GENERAL_FITNESS"]}}
-        if request.goal_category != "GENERAL_FITNESS"
-        else None
+        n_results=request.top_k
     )
 
-    retrieved_texts = results["documents"][0]  # list of matching chunk texts
+    retrieved_texts = results["documents"][0]
     retrieved_ids = results["ids"][0]
     distances = results["distances"][0]
 
-    # Log what was retrieved (useful for debugging retrieval quality)
     print(f"\nQuery: {request.question}")
-    print(f"Retrieved {len(retrieved_texts)} chunks:")
     for i, (chunk_id, dist) in enumerate(zip(retrieved_ids, distances)):
         print(f"  {i+1}. {chunk_id} (similarity: {1-dist:.3f})")
 
-    # If nothing relevant retrieved, fall back gracefully
     if not retrieved_texts:
         return AnswerResponse(
             answer="I don't have specific information on that topic. "
@@ -266,14 +212,14 @@ async def ask_question(request: QuestionRequest):
             retrieval_method="fallback"
         )
 
-    # ── Step 2: AUGMENT ───────────────────────────────────────────────────────
+    # Step 2: AUGMENT
     context = "\n\n---\n\n".join(retrieved_texts)
 
     prompt = f"""You are a knowledgeable fitness advisor for FitConnect.
 
 Answer the user's question using ONLY the information provided in the context below.
 If the context doesn't fully cover the question, say so clearly.
-Be specific and practical. Answer in 2-4 sentences.
+Be specific and practical. Answer in 2 to 4 sentences.
 
 User's current fitness goal: {request.user_goal}
 
@@ -286,7 +232,9 @@ User's question: {request.question}
 
 Answer:"""
 
-    # ── Step 3: GENERATE ──────────────────────────────────────────────────────
+    # Step 3: GENERATE
+    # Check console.groq.com/docs/models for currently available models
+    # and replace the model name below with one that is active
     chat_completion = groq_client.chat.completions.create(
         messages=[
             {
@@ -299,8 +247,8 @@ Answer:"""
                 "content": prompt
             }
         ],
-        model="llama-3.1-70b-versatile",
-        temperature=0.3,  # low temperature = more factual, less creative
+        model="llama3-70b-8192",  # verify this is active in your Groq console
+        temperature=0.3,
         max_tokens=250
     )
 
@@ -312,7 +260,6 @@ Answer:"""
         retrieval_method="vector_similarity"
     )
 
-# ─── Health check ─────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
@@ -321,14 +268,12 @@ async def health():
         "chunks_indexed": collection.count(),
         "embedding_model": "all-MiniLM-L6-v2",
         "vector_db": "Chroma",
-        "llm": "Groq llama-3.1-70b-versatile"
+        "llm": "Groq llama-3.3-70b-versatile"
     }
 
-# ─── Debug endpoint — see what gets retrieved ─────────────────────────────────
 
 @app.post("/debug/retrieve")
 async def debug_retrieve(request: QuestionRequest):
-    """See exactly which chunks are retrieved and their similarity scores."""
     results = collection.query(
         query_texts=[request.question],
         n_results=request.top_k
@@ -345,3 +290,8 @@ async def debug_retrieve(request: QuestionRequest):
             for i in range(len(results["ids"][0]))
         ]
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8001)
