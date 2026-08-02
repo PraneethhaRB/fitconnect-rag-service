@@ -1,8 +1,10 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+
 print("Before chromadb import", flush=True)
 import chromadb
 print("After chromadb import", flush=True)
+
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from groq import Groq
 from dotenv import load_dotenv
@@ -14,7 +16,9 @@ load_dotenv()
 app = FastAPI(title="FitConnect RAG Service")
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
+print("Before PersistentClient", flush=True)
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
+print("After PersistentClient", flush=True)
 
 # ─── Embeddings via HuggingFace Inference API (no local torch/onnxruntime) ────
 # This avoids the SIGILL crashes caused by torch/onnxruntime assuming CPU
@@ -41,13 +45,17 @@ class HFEmbeddingFunction(EmbeddingFunction):
         return response.json()
 
 
+print("Before creating embedding_function instance", flush=True)
 embedding_function = HFEmbeddingFunction()
+print("After creating embedding_function instance", flush=True)
 
+print("Before get_or_create_collection", flush=True)
 collection = chroma_client.get_or_create_collection(
     name="fitness_knowledge",
     embedding_function=embedding_function,
     metadata={"hnsw:space": "cosine"}
 )
+print("After get_or_create_collection", flush=True)
 
 FITNESS_KNOWLEDGE = [
     {
@@ -179,13 +187,16 @@ FITNESS_KNOWLEDGE = [
 
 
 def seed_knowledge_base():
+    print("Entered seed_knowledge_base", flush=True)
     existing = collection.count()
+    print(f"Existing count: {existing}", flush=True)
     if existing >= len(FITNESS_KNOWLEDGE):
-        print(f"Knowledge base already seeded with {existing} chunks")
+        print(f"Knowledge base already seeded with {existing} chunks", flush=True)
         return
 
-    print(f"Seeding knowledge base with {len(FITNESS_KNOWLEDGE)} chunks...")
+    print(f"Seeding knowledge base with {len(FITNESS_KNOWLEDGE)} chunks...", flush=True)
 
+    print("About to call collection.add (this calls the HF embedding function)", flush=True)
     collection.add(
         ids=[chunk["id"] for chunk in FITNESS_KNOWLEDGE],
         documents=[chunk["text"] for chunk in FITNESS_KNOWLEDGE],
@@ -194,10 +205,12 @@ def seed_knowledge_base():
             for chunk in FITNESS_KNOWLEDGE
         ]
     )
-    print("Knowledge base seeded successfully")
+    print("collection.add succeeded — Knowledge base seeded successfully", flush=True)
 
 
+print("Before seed_knowledge_base() call", flush=True)
 seed_knowledge_base()
+print("After seed_knowledge_base() call", flush=True)
 
 
 class QuestionRequest(BaseModel):
