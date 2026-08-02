@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+print("Before chromadb import", flush=True)
 import chromadb
+print("After chromadb import", flush=True)
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from groq import Groq
 from dotenv import load_dotenv
